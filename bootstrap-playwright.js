@@ -1,11 +1,24 @@
 // bootstrap-playwright.js
 // This script initializes a Playwright E2E framework.
 // FIX: Implements try/catch around 'execSync' for the test run to gracefully handle the intentionally failing test.
+// v1.56 UPDATE: Updated README.md and network_data.spec.ts to showcase new APIs and Test Agents.
+// ENHANCEMENT: Added pre-install prompt to skip test execution and defaulted parallel workers for speed.
+// 🌟 NEW ENHANCEMENT: Implemented best-practice authentication using globalSetup (auth.setup.ts) and storageState.
+// 🐞 BUG FIXES:
+// 1. Corrected path handling in auth.setup.ts to avoid "Bad character escape sequence" error on Windows.
+// 2. Corrected auth.setup.ts to use 'chromium.launch()' instead of 'test.request.newContext()' for UI login.
 
 const fs = require('fs');
 const path = require('path');
 const { execSync } = require('child_process');
 const readline = require('readline');
+
+// --- CONSTANTS FOR AUTH SETUP ---
+const AUTH_DIR = 'auth';
+const STORAGE_STATE_FILE = path.join(AUTH_DIR, 'user.json');
+// The path used in the config file (relative from testDir)
+const RELATIVE_STORAGE_STATE_PATH = path.join('..', STORAGE_STATE_FILE).replace(/\\/g, '/'); // Ensure forward slashes for cross-platform
+// ---
 
 // --- 1. FILE CONTENT DEFINITIONS (STATIC DATA) ---
 
@@ -45,6 +58,7 @@ const getFileContents = () => ({
 .DS_Store
 /dist
 /build
+/${AUTH_DIR}
 `,
     'tsconfig.json': (testDirName) => `
 {
@@ -71,7 +85,35 @@ const getFileContents = () => ({
     'README.md': () => `
 # Playwright E2E Automation Framework
 
-This project contains a robust **Playwright end-to-end (E2E) testing framework**.
+This project contains a robust **Playwright end-to-end (E2E) testing framework**, initialized with the latest features of Playwright v1.56.
+
+---
+
+## 🔐 Authentication via Global Setup (Best Practice)
+
+This framework uses Playwright's **Global Setup** to manage the authenticated state, which is the fastest way to run authenticated tests.
+
+1.  **Login & Save:** The \`e2e.tests/auth.setup.ts\` file runs **once** before all tests to log in and save the session data to \`${STORAGE_STATE_FILE}\`.
+2.  **Load State:** All browser projects in \`playwright.config.ts\` are configured to **automatically load** this saved state, skipping the login UI step for every test and worker.
+3.  **Test Example:** See \`auth_storage.spec.ts\` for an example of a test that starts directly on a protected page.
+
+---
+
+## 🤖 Playwright Test Agents (v1.56)
+
+Playwright v1.56 introduced **Test Agents**, custom AI-driven agents that can assist with test creation, generation, and self-healing.
+
+These agents can be generated using the following command, which creates agent definitions for various AI clients (like VS Code, Claude, or OpenCode):
+
+\`\`\`bash
+npx playwright init-agents --loop=vscode
+# or --loop=claude, --loop=opencode
+\`\`\`
+
+**The three core agents are:**
+* **🎭 planner:** Explores the application and creates a Markdown test plan.
+* **🎭 generator:** Transforms the Markdown plan into actual Playwright Test files.
+* **🎭 healer:** Executes the test suite and automatically repairs failing tests.
 
 ---
 
@@ -89,6 +131,17 @@ This framework was initialized with the following settings:
 ### 🛠️ Important Note on Visual Tests
 
 During the initial run, the system creates baseline screenshots for the visual regression test. You **must** manually review these newly created images in the snapshot folder to confirm they represent the correct desired state of the application.
+
+---
+
+## ✨ New API Showcase (v1.56)
+
+The framework's \`network_data.spec.ts\` test now showcases the new v1.56 methods:
+* \`page.consoleMessages()\`
+* \`page.pageErrors()\`
+* \`page.requests()\`
+
+These methods allow for retrieving recent data without manually setting up page listeners, simplifying network and console assertions.
 
 ---
 
@@ -119,11 +172,15 @@ import path from 'path';
 // The baseURL is set to the value provided during the bootstrap process, 
 // unless the BASE_URL environment variable is explicitly set.
 const DEFAULT_BASE_URL = '${config.baseURL}';
+const storageStatePath = path.join(__dirname, '${RELATIVE_STORAGE_STATE_PATH}');
 
 export default defineConfig({
   testDir: path.join(__dirname, 'tests'),
   baseURL: process.env.BASE_URL || DEFAULT_BASE_URL,
-
+  
+  // 🔐 GLOBAL SETUP: Runs once before all tests to save the authentication state
+  globalSetup: require.resolve('./auth.setup'),
+  
   fullyParallel: true,
   forbidOnly: !!process.env.CI,
   // --- Configurable Settings ---
@@ -143,10 +200,13 @@ export default defineConfig({
     screenshot: 'only-on-failure',
     trace: 'on-first-retry', 
     video: 'retain-on-failure', 
+    // 🔐 GLOBAL USE: Automatically loads the saved authentication state for all tests
+    storageState: storageStatePath, 
   },
 
   projects: [
     ${config.browserProjects.map(p => {
+        // We only use the saved storage state for web browsers, not API tests (which typically use API tokens)
         if (p === 'chromium') return `{ name: 'chromium', use: { ...devices['Desktop Chrome'] } }`;
         if (p === 'firefox') return `{ name: 'firefox', use: { ...devices['Desktop Firefox'] } }`;
         if (p === 'webkit') return `{ name: 'webkit', use: { ...devices['Desktop Safari'] } }`;
@@ -158,6 +218,68 @@ export default defineConfig({
   outputDir: 'test-artifacts',
 });
 `,
+    // --- NEW FILE: auth.setup.ts ---
+    [path.join('e2e.tests', 'auth.setup.ts')]: (testDirName) => {
+        // Use path.join to ensure OS-agnostic path construction, and double-escape the backslashes
+        // if needed, so the resulting string in the .ts file is a valid JS string.
+        const safeStoragePath = STORAGE_STATE_FILE.replace(/\\/g, '\\\\');
+
+        return `
+import { test, expect, chromium } from '@playwright/test';
+import * as path from 'path';
+
+// --- Constants for Authentication ---
+const AUTH_URL = 'https://practicetestautomation.com/practice-test-login/';
+const USERNAME = 'student';
+const PASSWORD = 'Password123';
+// The path where the authentication state will be saved (relative to the framework root).
+// FIX: Constructs the path using path.join and uses the escaped variable for cross-platform compatibility.
+const STORAGE_STATE_PATH = path.join(process.cwd(), '${safeStoragePath}');
+
+/**
+ * Global setup function to log in once and save the session state.
+ * This runs before all tests start.
+ */
+async function globalSetup() {
+    console.log('\\n🔐 Running Playwright Global Setup: Logging in and saving session...');
+    
+    // 1. LAUNCH BROWSER: Use chromium to launch a headless browser (FIXED)
+    const browser = await chromium.launch();
+    
+    // 2. CREATE PAGE: Get a Page object from the Browser Context
+    const page = await browser.newPage();
+    
+    try {
+        await page.goto(AUTH_URL);
+
+        // Perform login
+        await page.locator('#username').fill(USERNAME);
+        await page.locator('#password').fill(PASSWORD);
+        await page.getByRole('button', { name: 'Submit' }).click();
+
+        // Wait for successful redirect and verify a protected element
+        const protectedPageUrl = 'https://practicetestautomation.com/logged-in-successfully/';
+        await page.waitForURL(protectedPageUrl);
+        await expect(page.locator('.post-title')).toHaveText('Logged In Successfully');
+        
+        // 3. Save the session state (cookies, local storage, etc.)
+        await page.context().storageState({ path: STORAGE_STATE_PATH });
+        
+        console.log(\`✅ Authentication state saved to: \${STORAGE_STATE_PATH}\`);
+
+    } catch (error) {
+        console.error('❌ Global Setup Failed: Could not login and save authentication state.');
+        console.error('Check if the website is available and if credentials (student/Password123) are correct.');
+        throw error;
+    } finally {
+        // 4. CLOSE BROWSER: It's critical to close the browser instance created in global setup
+        await browser.close();
+    }
+}
+
+export default globalSetup;
+`;
+    },
     [path.join('e2e.tests', 'testdata.json')]: () => `
 {
   "app": {
@@ -294,6 +416,41 @@ test.describe('Swagger Petstore API GET Test', () => {
     });
 });
 `,
+    // --- UPDATED auth_storage.spec.ts (Now only verification) ---
+    [path.join('e2e.tests', 'tests', 'auth_storage.spec.ts')]: () => `
+// FIX: Changed from '~/fixtures/baseTest' to relative path
+import { test, expect } from '../fixtures/baseTest';
+
+const PROTECTED_URL = 'https://practicetestautomation.com/logged-in-successfully/';
+
+test.describe('Storage State Verification (After Global Setup)', () => {
+    
+    /**
+     * This test demonstrates that the session state saved by auth.setup.ts
+     * is automatically loaded by the browser context. This allows the test
+     * to start directly on the protected page, skipping the login UI.
+     */
+    test('should automatically access protected page using pre-loaded session', async ({ page }) => {
+        
+        await test.step('Navigate to Protected Page', async () => {
+            // Note: No login actions required here!
+            await page.goto(PROTECTED_URL);
+        });
+
+        // Verify successful access by checking for a protected element
+        await test.step('Verify Authenticated State', async () => {
+            const successMessage = page.locator('.post-title');
+            
+            await expect(successMessage).toBeVisible({ timeout: 10000 });
+            await expect(successMessage).toHaveText('Logged In Successfully');
+            await expect(page).toHaveURL(/.*logged-in-successfully/);
+            
+            console.log("✅ Successfully accessed protected page via pre-authenticated storage state.");
+        });
+    });
+});
+`,
+    // --- END UPDATED auth_storage.spec.ts ---
     [path.join('e2e.tests', 'tests', 'a11y.spec.ts')]: () => `
 // FIX: Changed from '~/fixtures/baseTest' to relative path
 import { test } from "../fixtures/baseTest";
@@ -413,24 +570,25 @@ export class TestUtils {
 `,
     [path.join('e2e.tests', 'tests', 'network_data.spec.ts')]: () => `
 // FIX: Changed from '~/fixtures/baseTest' to relative path
-import { test, expect, ConsoleMessage, Request } from '../fixtures/baseTest';
+import { test, expect } from '../fixtures/baseTest';
 
-test.describe('Network and Console Data Showcase', () => {
-    test('should capture and verify console log messages', async ({ page }) => {
-        const consoleMessages: ConsoleMessage[] = [];
-        page.on('console', (msg) => {
-            consoleMessages.push(msg);
-        });
-
+test.describe('Network and Console Data Showcase (v1.56 New APIs)', () => {
+    
+    // --- SHOWCASE: page.consoleMessages() and page.pageErrors() (v1.56) ---
+    test('should capture and verify console log messages using new APIs', async ({ page }) => {
+        
         await page.goto('/');
 
+        // Trigger console messages and an error on the client side
         await page.evaluate(() => {
             console.log('CLIENT_LOG: Page is fully loaded and interactive.');
             console.error('CLIENT_ERROR: An expected non-fatal error occurred.');
+            // Note: page.pageErrors() will catch unhandled exceptions, not console.error
         });
         
-        await page.waitForTimeout(100); 
-
+        // No manual listeners required! The new API gets recent messages.
+        const consoleMessages = await page.consoleMessages();
+        
         const logMessage = consoleMessages.find(msg => msg.text().includes('CLIENT_LOG:'));
         expect(logMessage, 'Expected console log message not found.').toBeDefined();
         expect(logMessage!.type()).toBe('log');
@@ -438,27 +596,35 @@ test.describe('Network and Console Data Showcase', () => {
         const errorMessage = consoleMessages.find(msg => msg.text().includes('CLIENT_ERROR:'));
         expect(errorMessage, 'Expected console error message not found.').toBeDefined();
         expect(errorMessage!.type()).toBe('error');
+
+        // Optional: Example of checking for unhandled exceptions (pageErrors)
+        const pageErrors = await page.pageErrors();
+        expect(pageErrors.length, 'No unhandled page errors should have occurred.').toBe(0);
     });
 
-    test('should capture and verify network requests', async ({ page }) => {
-        const requests: Request[] = [];
-        page.on('request', (request) => {
-            requests.push(request);
-        });
-
+    // --- SHOWCASE: page.requests() (v1.56) ---
+    test('should capture and verify network requests using new API', async ({ page }) => {
+        
+        // Navigating to the page generates network requests
         await page.goto('/');
         
+        // Wait for all network activity to finish
         await page.waitForLoadState('networkidle');
+
+        // No manual listeners required! The new API gets recent requests.
+        const requests = await page.requests();
 
         const mainRequest = requests.find(req => req.url().endsWith('/') && req.method() === 'GET');
         expect(mainRequest, 'Main page request not found.').toBeDefined();
+        
+        // Await the response of the captured request
         expect(mainRequest!.response()).toBeTruthy();
         expect((await mainRequest!.response())!.status()).toBe(200);
 
         const cssRequest = requests.find(req => req.resourceType() === 'stylesheet');
         expect(cssRequest, 'A stylesheet request was expected.').toBeDefined();
 
-        console.log(\`Captured \${requests.length} total network requests during navigation.\`);
+        console.log(\`Captured \${requests.length} total network requests during navigation (using page.requests()).\`);
     });
 });
 `
@@ -498,6 +664,11 @@ function promptUser(query, options = {}) {
 
         // Ensure ans is safely converted to a string before trimming
         let result = String(ans || '').trim() || options.default;
+
+        if (options.type === 'boolean') {
+             // Resolve as true if the answer starts with 'y' or 'Y', otherwise false (defaulting to true)
+            return resolve(result.toLowerCase().startsWith('y') || result === '');
+        }
 
         if (options.type === 'number') {
             const num = parseInt(result, 10);
@@ -572,7 +743,8 @@ async function getFrameworkSettings() {
     console.log(`\nUsing Base URL: ${baseURL}`);
 
     // --- 3. Concurrency and Retries (Robustness/Performance) ---
-    const maxWorkers = await promptUser(`Max Parallel Workers (e.g., 4, or leave blank for OS default): `, { type: 'number', default: 'undefined' });
+    // ENHANCEMENT: Defaulted to 4 for better parallelism.
+    const maxWorkers = await promptUser(`Max Parallel Workers (e.g., 4, or leave blank for OS default 'undefined') (Default: 4): `, { type: 'number', default: 4 });
     const retries = await promptUser(`Default Test Retries on failure (e.g., 2): `, { type: 'number', default: 2 });
 
     // --- 4. Browser Selection (Scope) ---
@@ -595,7 +767,8 @@ async function getFrameworkSettings() {
         testDirName,
         frameworkRoot,
         baseURL,
-        maxWorkers: maxWorkers === 'undefined' ? 'undefined' : String(maxWorkers),
+        // Set to 'undefined' if the user left it blank or entered 0, otherwise use the number
+        maxWorkers: (maxWorkers === 0 || maxWorkers === 'undefined') ? 'undefined' : String(maxWorkers),
         retries,
         browserProjects: selectedBrowsers
     };
@@ -608,6 +781,9 @@ async function getFrameworkSettings() {
 function createStructure(testDirName) {
     const frameworkPath = path.join(process.cwd(), testDirName);
     createDir(frameworkPath);
+    // NEW DIRECTORY: For authentication state
+    createDir(path.join(process.cwd(), AUTH_DIR));
+
     createDir(path.join(frameworkPath, 'fixtures'));
     createDir(path.join(frameworkPath, 'pages'));
     createDir(path.join(frameworkPath, 'tests'));
@@ -644,6 +820,7 @@ function writeFiles(testDirName, config) {
                 .replace('{__BROWSERS__}', config.browserProjects.join(', '))
                 .replace('{__BASE_URL__}', config.baseURL);
         } else if (typeof contentFunc === 'function') {
+            // Handle content generation for auth.setup.ts, which is a function that returns a template string
             content = contentFunc(testDirName);
         } else {
             // This handles non-function content like .gitignore
@@ -672,10 +849,11 @@ function runVerificationTests(testDirName, config) {
     console.log(`and the retry mechanism (set to **${config.retries}** retries).`);
     console.log(`The final report will correctly show one expected failure.`);
 
-    const allTests = `${testDirName}/tests/seed.spec.ts ${testDirName}/tests/the-internet-sample.spec.ts ${testDirName}/tests/network_data.spec.ts ${testDirName}/tests/api.spec.ts ${testDirName}/tests/visual.spec.ts ${testDirName}/tests/volatile.spec.ts ${expectedFailPath}`;
+    // Include the new auth_storage.spec.ts
+    const allTests = `${testDirName}/tests/seed.spec.ts ${testDirName}/tests/the-internet-sample.spec.ts ${testDirName}/tests/network_data.spec.ts ${testDirName}/tests/api.spec.ts ${testDirName}/tests/visual.spec.ts ${testDirName}/tests/volatile.spec.ts ${testDirName}/tests/auth_storage.spec.ts ${expectedFailPath}`;
     const fullVerificationCommand = `npx playwright test --config=${testDirName}/playwright.config.ts ${allTests} --update-snapshots`;
 
-    console.log(`\n--- Creating Baseline Snapshot & Running Full Suite (Including Expected Failure) ---`);
+    console.log(`\n--- Running Global Setup, Creating Baseline Snapshot & Full Suite (Including Expected Failure) ---`);
 
     try {
         // This command is expected to throw because expected-fail.spec.ts fails.
@@ -713,12 +891,14 @@ function installDependencies() {
 function initializeVsCodeAgent() {
     console.log(`\n======================================================`);
     console.log(`🤖 Initializing Playwright VS Code Debugging Agent...`);
+    console.log(`   (Required for the v1.56 Test Agents feature)`);
     console.log(`======================================================`);
     try {
+        // Run init-agents for VS Code as a standard setup step
         execSync('npx playwright init-agents --loop=vscode', { stdio: 'inherit' });
-        console.log(`✅ VS Code Agent setup files completed.`);
+        console.log(`✅ VS Code Agent setup files completed (.vscode folder created).`);
     } catch (error) {
-        console.log(`⚠️ VS Code Agent setup failed. Not critical for running tests.`);
+        console.log(`⚠️ VS Code Agent setup failed. This feature requires Playwright >= 1.56. Not critical for basic test execution.`);
     }
 }
 
@@ -727,16 +907,31 @@ function initializeVsCodeAgent() {
 
 async function setupFramework() {
     console.log(`\n======================================================`);
-    console.log(`🚀 Playwright E2E Framework Bootstrap`);
+    console.log(`🚀 Playwright E2E Framework Bootstrap (v1.56 Ready)`);
     console.log(`======================================================`);
 
     try {
+        // ENHANCEMENT: Ask if user wants to run tests before installation begins
+        const shouldRunTests = await promptUser(
+            'Do you want to run the initial verification tests after installation (Recommended: Y/n)? ',
+            { type: 'boolean', default: true }
+        );
+
+        if (!shouldRunTests) {
+            console.log("\n⚠️ Skipping initial test execution as requested. Remember to run 'npm test' later!");
+        }
+
         const config = await getFrameworkSettings();
 
         createStructure(config.testDirName);
         writeFiles(config.testDirName, config);
         installDependencies();
-        runVerificationTests(config.testDirName, config);
+
+        // Conditional test run
+        if (shouldRunTests) {
+            runVerificationTests(config.testDirName, config);
+        }
+
         initializeVsCodeAgent();
 
         // 7. Final Instructions
@@ -746,9 +941,12 @@ async function setupFramework() {
         console.log(`\nYour Playwright framework is ready at root: **${config.frameworkRoot}**`);
         console.log(`The test directory is: **${path.join(config.frameworkRoot, config.testDirName)}**`);
         console.log(`\n--- Next Steps ---`);
-        console.log(`1. View the full HTML report by running: **npm run report**`);
-        console.log(`2. **Manual Validation**: Inspect snapshots in '${config.testDirName}/tests/visual.spec.ts-snapshots' to confirm the visual baseline is correct.`);
-        console.log(`3. The **baseURL** in '${path.join(config.testDirName, 'playwright.config.ts')}' is set to **${config.baseURL}**.`);
+        console.log(`1. **Authentication**: The session for **student/Password123** is saved to **${path.join(config.frameworkRoot, STORAGE_STATE_FILE)}** and is loaded automatically for all UI tests.`);
+        if (!shouldRunTests) {
+             console.log(`2. **Run Tests Now**: Execute 'npm test' to verify the installation and create visual snapshots.`);
+        }
+        console.log(`2. View the full HTML report by running: **npm run report**`);
+        console.log(`3. **Manual Validation**: Inspect snapshots in '${config.testDirName}/tests/visual.spec.ts-snapshots' to confirm the visual baseline is correct.`);
 
     } catch (error) {
         console.error(`\n\n❌ Fatal Error during setup. Execution failed.`);
