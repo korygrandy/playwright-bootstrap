@@ -13,9 +13,10 @@ This framework is configured out-of-the-box with professional features, includin
 * **🧪 Advanced Test Examples:** Includes ready-to-use tests for **API testing**, **Visual Regression**, **Network/Console logging** (using modern Playwright APIs), and a template for **Accessibility (A11y)**.
 * **🛡️ Robustness Features:** Configured for automatic test **retries** on failure and a custom utility for **conditional retries** to handle known volatile tests.
 * **🧩 Custom Fixtures & POMs:** Extends the core Playwright `test` object with custom fixtures for Page Object Models (POMs) and utility classes.
+* **🧩 Playwright MCP Ai Agent OOTB:** Start using Playwright MCP immidiately!
 
 ---
-
+  
 ## 🚀 Getting Started
 
 To run the full suite and generate the initial reports and snapshots:
