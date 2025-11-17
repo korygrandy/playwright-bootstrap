@@ -1,6 +1,6 @@
 // bootstrap-playwright.js
 // This script initializes a Playwright E2E framework.
-// v1.57 UPDATE: Included latest AI Planner, Generator, Healer functionality into script.
+// v1.58 UPDATE: Moved AI MCP to first initial user prompt.
 
 const fs = require('fs');
 const path = require('path');
@@ -905,6 +905,11 @@ async function setupFramework() {
     console.log(`======================================================`);
 
     try {
+        const shouldInstallAiAgents = await promptUser(
+            'Do you want to install AI Planner, Healer, Generator for VSCode? (Y/n): ',
+            { type: 'boolean', default: false }
+        );
+
         // ENHANCEMENT: Ask if user wants to run tests before installation begins
         const shouldRunTests = await promptUser(
             'Do you want to run the initial verification tests after installation (Recommended: Y/n)? ',
@@ -925,11 +930,6 @@ async function setupFramework() {
         if (shouldRunTests) {
             runVerificationTests(config.testDirName, config);
         }
-
-        const shouldInstallAiAgents = await promptUser(
-            'Do you want to install AI Planner, Healer, Generator for VSCode? (Y/n): ',
-            { type: 'boolean', default: false }
-        );
 
         if (shouldInstallAiAgents) {
             initializeVsCodeAgent();
