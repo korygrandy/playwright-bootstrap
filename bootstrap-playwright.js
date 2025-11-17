@@ -1,12 +1,6 @@
 // bootstrap-playwright.js
 // This script initializes a Playwright E2E framework.
-// FIX: Implements try/catch around 'execSync' for the test run to gracefully handle the intentionally failing test.
-// v1.56 UPDATE: Updated README.md and network_data.spec.ts to showcase new APIs and Test Agents.
-// ENHANCEMENT: Added pre-install prompt to skip test execution and defaulted parallel workers for speed.
-// 🌟 NEW ENHANCEMENT: Implemented best-practice authentication using globalSetup (auth.setup.ts) and storageState.
-// 🐞 BUG FIXES:
-// 1. Corrected path handling in auth.setup.ts to avoid "Bad character escape sequence" error on Windows.
-// 2. Corrected auth.setup.ts to use 'chromium.launch()' instead of 'test.request.newContext()' for UI login.
+// v1.57 UPDATE: Included latest AI Planner, Generator, Healer functionality into script.
 
 const fs = require('fs');
 const path = require('path');
@@ -932,7 +926,14 @@ async function setupFramework() {
             runVerificationTests(config.testDirName, config);
         }
 
-        initializeVsCodeAgent();
+        const shouldInstallAiAgents = await promptUser(
+            'Do you want to install AI Planner, Healer, Generator for VSCode? (Y/n): ',
+            { type: 'boolean', default: false }
+        );
+
+        if (shouldInstallAiAgents) {
+            initializeVsCodeAgent();
+        }
 
         // 7. Final Instructions
         console.log(`\n======================================================`);
@@ -945,8 +946,11 @@ async function setupFramework() {
         if (!shouldRunTests) {
              console.log(`2. **Run Tests Now**: Execute 'npm test' to verify the installation and create visual snapshots.`);
         }
-        console.log(`2. View the full HTML report by running: **npm run report**`);
-        console.log(`3. **Manual Validation**: Inspect snapshots in '${config.testDirName}/tests/visual.spec.ts-snapshots' to confirm the visual baseline is correct.`);
+        console.log(`3. View the full HTML report by running: **npm run report**`);
+        console.log(`4. **Manual Validation**: Inspect snapshots in '${config.testDirName}/tests/visual.spec.ts-snapshots' to confirm the visual baseline is correct.`);
+        if (shouldInstallAiAgents) {
+            console.log(`5. **Playwright AI Agents**: The Planner, Generator, and Healer agents have been installed for VS Code. Learn more at: https://playwright.dev/docs/test-agents`);
+        }
 
     } catch (error) {
         console.error(`\n\n❌ Fatal Error during setup. Execution failed.`);
